@@ -11,11 +11,22 @@ import PlayerSeat from './components/PlayerSeat';
 import CardComponent from './components/CardComponent';
 import { Coins, Eye, Trophy, RefreshCw, XCircle, Swords, ArrowUpCircle, Zap, Users, Copy, LogIn, Wifi, UserPlus, LogOut, Play, AlertTriangle } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Peer, DataConnection } from 'peerjs';
+import { Peer, DataConnection, PeerOptions } from 'peerjs';
 
 // --- Utils ---
 const getRandomAvatar = () => {
     return `https://picsum.photos/seed/${Math.floor(Math.random() * 1000000)}/100/100`;
+};
+
+// --- Networking Config ---
+const PEER_CONFIG: PeerOptions = {
+    config: {
+        iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' },
+            { urls: 'stun:stun2.l.google.com:19302' },
+        ]
+    }
 };
 
 // --- Animation Components ---
@@ -417,7 +428,8 @@ const App: React.FC = () => {
   // Initialize PeerJS for Host
   const setupHost = (customId?: string) => {
       // Use custom ID if provided, else random
-      const peer = customId ? new Peer(customId) : new Peer();
+      // Pass PEER_CONFIG to ensure STUN servers are used
+      const peer = customId ? new Peer(customId, PEER_CONFIG) : new Peer(PEER_CONFIG);
       peerRef.current = peer;
 
       peer.on('open', (id) => {
@@ -482,7 +494,8 @@ const App: React.FC = () => {
 
   // Initialize PeerJS for Client
   const joinGame = (hostId: string) => {
-      const peer = new Peer();
+      // Pass PEER_CONFIG here too
+      const peer = new Peer(PEER_CONFIG);
       peerRef.current = peer;
       setConnectionStatus('正在连接主机...');
 
