@@ -174,7 +174,7 @@ const CompareOverlay: React.FC<{ data: CompareData; onComplete: () => void }> = 
 
 // --- Lobby Component ---
 const Lobby: React.FC<{ 
-    onCreate: (mode: NetworkMode, botCount?: number) => void, 
+    onCreate: (mode: NetworkMode, botCount?: number, customId?: string) => void, 
     onJoin: (id: string) => void,
     roomCode: string | null,
     players: Player[],
@@ -183,6 +183,7 @@ const Lobby: React.FC<{
     connectionStatus: string
 }> = ({ onCreate, onJoin, roomCode, players, onStartGame, isHost, connectionStatus }) => {
     const [inputCode, setInputCode] = useState('');
+    const [customRoomId, setCustomRoomId] = useState('');
     const [lobbyMode, setLobbyMode] = useState<'MENU' | 'HOSTING' | 'JOINING'>('MENU');
     const [botCount, setBotCount] = useState(2);
 
@@ -218,10 +219,10 @@ const Lobby: React.FC<{
                             <div key={p.id} className="flex items-center justify-between bg-gray-800 p-2 rounded">
                                 <div className="flex items-center gap-3">
                                     <img src={p.avatar} className="w-8 h-8 rounded-full" alt="" />
-                                    <span>{p.name}</span>
+                                    <span>{p.name} {p.id === 0 ? '(房主)' : ''}</span>
                                 </div>
                                 <span className={`text-xs px-2 py-1 rounded ${p.status === PlayerStatus.WAITING ? 'bg-green-900 text-green-300' : 'bg-gray-700'}`}>
-                                    {p.id === 0 ? '房主' : (p.isHuman ? '已准备' : '电脑')}
+                                    {p.isHuman ? '已准备' : '电脑'}
                                 </span>
                             </div>
                         ))}
@@ -289,7 +290,7 @@ const Lobby: React.FC<{
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center backdrop-blur-sm">
             <div className="bg-gray-900 p-8 rounded-2xl border border-gray-700 shadow-2xl w-full max-w-4xl flex flex-col items-center">
                 <h1 className="text-6xl font-serif font-bold text-transparent bg-clip-text bg-gradient-to-r from-yellow-300 to-yellow-600 mb-2">炸金花</h1>
-                <p className="text-gray-400 mb-10 tracking-widest text-lg">ZHA JIN HUA - 联机模式</p>
+                <p className="text-gray-400 mb-10 tracking-widest text-lg">ZHA JIN HUA - 联机模式 <span className="text-red-500 font-bold ml-2">修复bug1</span></p>
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 w-full">
                     {/* Single Player */}
@@ -322,16 +323,27 @@ const Lobby: React.FC<{
                     </div>
 
                     {/* Host Game */}
-                    <button 
-                        onClick={() => { setLobbyMode('HOSTING'); onCreate('HOST'); }}
-                        className="group flex flex-col items-center bg-gray-800 hover:bg-gray-700 p-6 rounded-xl border-2 border-transparent hover:border-yellow-500 transition-all"
-                    >
-                        <div className="w-16 h-16 bg-yellow-900 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
-                            <Wifi size={32} className="text-yellow-400" />
+                    <div className="group flex flex-col bg-gray-800 rounded-xl border-2 border-transparent hover:border-yellow-500 transition-all p-4">
+                         <div 
+                            onClick={() => { setLobbyMode('HOSTING'); onCreate('HOST', 0, customRoomId); }}
+                            className="flex flex-col items-center cursor-pointer mb-4"
+                        >
+                            <div className="w-16 h-16 bg-yellow-900 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                                <Wifi size={32} className="text-yellow-400" />
+                            </div>
+                            <h3 className="text-xl font-bold text-white mb-2">创建房间</h3>
+                            <p className="text-gray-400 text-sm text-center">创建房间邀请好友加入</p>
                         </div>
-                        <h3 className="text-xl font-bold text-white mb-2">创建房间</h3>
-                        <p className="text-gray-400 text-sm text-center">创建房间邀请好友加入</p>
-                    </button>
+                        <div className="border-t border-gray-700 pt-3 w-full">
+                            <input 
+                                type="text"
+                                value={customRoomId}
+                                onChange={(e) => setCustomRoomId(e.target.value)}
+                                placeholder="自定义房间ID (可选)"
+                                className="w-full bg-black/30 border border-gray-600 rounded px-2 py-1 text-xs text-center text-white focus:border-yellow-500 outline-none"
+                            />
+                        </div>
+                    </div>
 
                     {/* Join Game */}
                     <button 
@@ -381,7 +393,7 @@ const App: React.FC = () => {
   const [winnerId, setWinnerId] = useState<number | null>(null);
   const [customRaise, setCustomRaise] = useState<string>('');
   const [comparingInitiatorId, setComparingInitiatorId] = useState<number | null>(null);
-  const [raiseCount, setRaiseCount] = useState<number>(0); // NEW: Track consecutive raises
+  const [raiseCount, setRaiseCount] = useState<number>(0);
   
   // Animations State
   const [flyingChips, setFlyingChips] = useState<{id: number, start: {x: string, y: string}}[]>([]);
@@ -389,6 +401,9 @@ const App: React.FC = () => {
 
   const logsEndRef = useRef<HTMLDivElement>(null);
   
+  // Ref for Action Handler to solve closure staleness
+  const handleRemoteActionRef = useRef<(payload: ActionPayload) => void>(() => {});
+
   const addLog = (message: string) => {
     setLogs(prev => [...prev, { id: Date.now().toString() + Math.random(), message }]);
   };
@@ -400,50 +415,67 @@ const App: React.FC = () => {
   // --- Networking Logic ---
 
   // Initialize PeerJS for Host
-  const setupHost = () => {
-      const peer = new Peer();
+  const setupHost = (customId?: string) => {
+      // Use custom ID if provided, else random
+      const peer = customId ? new Peer(customId) : new Peer();
       peerRef.current = peer;
 
       peer.on('open', (id) => {
           setRoomCode(id);
           setConnectionStatus('等待玩家加入...');
-          // Host is always Player 0
           setMyPlayerId(0);
+          // Initial Host Player
+          setPlayers([{ id: 0, name: '房主', isHuman: true, chips: INITIAL_CHIPS, cards: [], hasSeenCards: false, status: PlayerStatus.WAITING, currentBet: 0, isDealer: false, avatar: getRandomAvatar() }]);
+      });
+      
+      peer.on('error', (err) => {
+          alert('Error: ' + err.type);
+          setConnectionStatus('错误: ' + err.type);
       });
 
       peer.on('connection', (conn) => {
           // Accept connection
           conn.on('open', () => {
-              const newPlayerIndex = connectionsRef.current.length + 1; // 1 then 2
-              if (newPlayerIndex > 2) {
-                  conn.close(); // Max 3 players for online demo
-                  return;
-              }
-              
-              connectionsRef.current.push(conn);
-              addLog(`玩家连接成功! 分配座位 ${newPlayerIndex}`);
-              
-              // Update players array to make that seat Human
-              setPlayers(prev => prev.map(p => {
-                  if (p.id === newPlayerIndex) {
-                      return { ...p, name: `玩家 ${newPlayerIndex}`, isHuman: true, status: PlayerStatus.WAITING, peerId: conn.peer };
-                  }
-                  return p;
-              }));
+              // Add to connections list if not already there
+              if (!connectionsRef.current.find(c => c.peer === conn.peer)) {
+                  connectionsRef.current.push(conn);
+                  
+                  const newPlayerIndex = connectionsRef.current.length; // 1, 2...
+                  addLog(`玩家连接成功! 分配座位 ${newPlayerIndex}`);
+                  
+                  // Update players array
+                  setPlayers(prev => {
+                      const newP = { 
+                          id: newPlayerIndex, 
+                          name: `玩家 ${newPlayerIndex}`, 
+                          isHuman: true, 
+                          status: PlayerStatus.WAITING, 
+                          peerId: conn.peer, 
+                          chips: INITIAL_CHIPS, cards: [], hasSeenCards: false, currentBet: 0, isDealer: false, avatar: getRandomAvatar()
+                      };
+                      return [...prev, newP as Player];
+                  });
 
-              // Send Welcome Message
-              const msg: GameMessage = {
-                  type: 'WELCOME',
-                  payload: { playerId: newPlayerIndex }
-              };
-              conn.send(msg);
+                  // Send Welcome Message
+                  const msg: GameMessage = {
+                      type: 'WELCOME',
+                      payload: { playerId: newPlayerIndex }
+                  };
+                  conn.send(msg);
+              }
           });
 
           conn.on('data', (data: unknown) => {
               const msg = data as GameMessage;
               if (msg.type === 'ACTION') {
-                  handleRemoteAction(msg.payload as ActionPayload);
+                  // Call the Ref function which holds the latest closure
+                  handleRemoteActionRef.current(msg.payload as ActionPayload);
               }
+          });
+          
+          conn.on('close', () => {
+              // Handle disconnect?
+              addLog("有玩家断开连接");
           });
       });
   };
@@ -470,6 +502,11 @@ const App: React.FC = () => {
           conn.on('error', (err) => {
               setConnectionStatus('连接错误: ' + err);
           });
+          
+          conn.on('close', () => {
+             alert("与房主断开连接");
+             setInLobby(true);
+          });
       });
 
       peer.on('error', (err) => {
@@ -481,9 +518,23 @@ const App: React.FC = () => {
   const handleServerMessage = (msg: GameMessage) => {
       if (msg.type === 'WELCOME') {
           setMyPlayerId(msg.payload.playerId);
-          setInLobby(false); // Enter game view
+          // Don't setInLobby(false) yet. Wait for game start.
+          setConnectionStatus(`连接成功 (ID: ${msg.payload.playerId}) - 等待游戏开始...`);
       } else if (msg.type === 'STATE_SYNC') {
           const state = msg.payload;
+          
+          // Strict Game Start Logic:
+          // If we are in lobby, and we receive a sync that indicates game is starting (or just has valid players), we enter.
+          // Host sends GAME_START first? Or just syncs state where Phase != IDLE?
+          if (inLobby) {
+             // We can check if state.gamePhase != IDLE or if we receive a special flag
+             // Let's assume if we get a Sync and the host has started, we jump in.
+             // But usually Sync happens frequently. Let's look for a specific 'GAME_START' event in the payload event.
+             if (state.event && state.event.type === 'GAME_START') {
+                 setInLobby(false);
+             }
+          }
+
           // Update local state to match host
           setPlayers(state.players);
           setPot(state.pot);
@@ -492,7 +543,7 @@ const App: React.FC = () => {
           setCurrentRoundBet(state.currentRoundBet);
           setWinnerId(state.winnerId);
           setComparingInitiatorId(state.comparingInitiatorId);
-          setRaiseCount(state.raiseCount || 0); // Sync raise count
+          setRaiseCount(state.raiseCount || 0);
 
           if (state.lastLog) {
               addLog(state.lastLog);
@@ -525,7 +576,7 @@ const App: React.FC = () => {
           currentRoundBet,
           winnerId,
           comparingInitiatorId,
-          raiseCount, // Include raiseCount in sync
+          raiseCount,
           event,
           lastLog: logMsg
       };
@@ -552,8 +603,9 @@ const App: React.FC = () => {
       const { action, playerId, amount, targetId } = payload;
 
       // Validate turn
+      // Note: We are now using handleRemoteActionRef, so `currentTurnIndex` here IS FRESH.
       if (currentTurnIndex !== playerId) {
-           console.warn(`Ignoring action from ${playerId} - not their turn`);
+           console.warn(`Ignoring action from ${playerId} - it is turn ${currentTurnIndex}`);
            return;
       }
 
@@ -568,13 +620,22 @@ const App: React.FC = () => {
       }
   };
 
+  // Update Ref whenever dependencies change
+  useEffect(() => {
+      handleRemoteActionRef.current = handleRemoteAction;
+  }); // Run on every render to ensure latest closure capture
+
   // --- Helpers ---
   
   const getPlayerPositionCSS = (id: number): { x: string, y: string } => {
-      if (id === 0) return { x: '50%', y: '90%' };
-      if (id === 1) return { x: '15%', y: '15%' };
-      if (id === 2) return { x: '85%', y: '15%' };
-      return { x: '50%', y: '50%' };
+      if (id === 0) return { x: '50%', y: '90%' }; // Host / Me
+      // Distribute others
+      // Simple logic for < 5 players
+      if (players.length <= 3) {
+          if (id === 1) return { x: '15%', y: '15%' };
+          if (id === 2) return { x: '85%', y: '15%' };
+      }
+      return { x: '50%', y: '10%' };
   };
 
   const triggerChipEffect = (playerId: number) => {
@@ -610,7 +671,20 @@ const App: React.FC = () => {
   // --- Actions ---
 
   const startNewGame = async () => {
-    if (networkMode === 'HOST' || networkMode === 'OFFLINE') setInLobby(false);
+    if (networkMode === 'HOST' || networkMode === 'OFFLINE') {
+        // Trigger Game Start Sync
+        if (networkMode === 'HOST') {
+            setInLobby(false);
+            // Must broadcast immediately that game started
+            // We can't use broadcastState yet because state hasn't updated.
+            // But we will broadcast inside the logic flow below when effects trigger.
+            // Actually, we need to send a specific 'GAME_START' signal.
+            // We will let the useEffect hook pick up the state change (Phase changes) and broadcast.
+            // But to be safe, let's send a force sync later.
+        } else {
+            setInLobby(false);
+        }
+    }
 
     const newDeck = generateDeck();
     const startIdx = Math.floor(Math.random() * players.length);
@@ -618,7 +692,7 @@ const App: React.FC = () => {
     setGamePhase(GamePhase.DEALING);
     setWinnerId(null);
     setComparingInitiatorId(null);
-    setRaiseCount(0); // Reset raise count
+    setRaiseCount(0);
     const startMsg = '游戏开始，正在发牌...';
     setLogs([{ id: 'start', message: startMsg }]);
     setPot(0);
@@ -636,11 +710,29 @@ const App: React.FC = () => {
       lastAction: undefined
     }));
     
-    // Initial Pot state (Ante)
     setPot(players.length * ANTE);
     setPlayers(resetPlayers);
     setCurrentTurnIndex(startIdx);
     setCurrentRoundBet(ANTE);
+    
+    // Broadcast START event
+    if (networkMode === 'HOST') {
+         // Create a temp state object to send start signal
+         const state = {
+            players: resetPlayers,
+            pot: players.length * ANTE,
+            gamePhase: GamePhase.DEALING,
+            currentTurnIndex: startIdx,
+            currentRoundBet: ANTE,
+            winnerId: null,
+            comparingInitiatorId: null,
+            raiseCount: 0,
+            event: { type: 'GAME_START' }, // Signal clients to leave lobby
+            lastLog: startMsg
+         };
+         const msg: GameMessage = { type: 'STATE_SYNC', payload: state };
+         connectionsRef.current.forEach(c => c.send(msg));
+    }
 
     // Animate Dealing
     const activeIds = resetPlayers.filter(p => p.status === PlayerStatus.PLAYING).map(p => p.id);
@@ -669,7 +761,7 @@ const App: React.FC = () => {
   }, [players, pot, gamePhase, currentTurnIndex, currentRoundBet, networkMode, inLobby, broadcastState]);
 
 
-  // --- Game Logic Handlers (Used by Host & Single Player) ---
+  // --- Game Logic Handlers ---
 
   const handleFold = (playerId: number) => {
     if (networkMode === 'CLIENT' && playerId === myPlayerId) {
@@ -749,7 +841,7 @@ const App: React.FC = () => {
     
     setPot(prev => prev + raiseAmount);
     setCurrentRoundBet(raiseAmount);
-    setRaiseCount(prev => prev + 1); // Increment raise count
+    setRaiseCount(prev => prev + 1);
     addLog(`${player.name} 加注至 ${raiseAmount}。 (第${raiseCount + 1}/10次)`);
     nextTurn();
   };
@@ -762,11 +854,7 @@ const App: React.FC = () => {
 
     const player = players[playerId];
     
-    // Check constraint for All-in (Must be <= 500,000)
-    // Note: The UI disables the button, but we should also check server-side
     if (player.chips > 500000 && networkMode === 'OFFLINE') {
-        // Strict rule mainly for self, but enforcing generally
-        // Just let it slide for bots or simplify
     }
 
     const allInAmount = player.chips;
@@ -838,7 +926,6 @@ const App: React.FC = () => {
           return;
       }
 
-      // Host Logic
       resolveCompare(comparingInitiatorId, targetId);
   };
 
@@ -852,7 +939,6 @@ const App: React.FC = () => {
     const aWins = compareHands(pA.cards, pB.cards);
     const winnerId = aWins ? idA : idB;
 
-    // Start Animation Phase
     setGamePhase(GamePhase.RESOLVING);
     const data = { pA, pB, winnerId };
     setCompareData(data);
@@ -877,7 +963,6 @@ const App: React.FC = () => {
 
       addLog(`结果: ${winnerName} 赢得了比牌！`);
       
-      // CRITICAL FIX: Calculate new players and next turn synchronously to avoid state race conditions
       const newPlayers = players.map(p => {
           if (p.id === loserId) return { ...p, status: PlayerStatus.LOST, lastAction: '比牌输', lastActionType: 'negative' as const };
           if (p.id === winnerId) return { ...p, lastAction: '比牌赢', lastActionType: 'positive' as const };
@@ -889,8 +974,6 @@ const App: React.FC = () => {
       setComparingInitiatorId(null);
       setCompareData(null);
       
-      // Calculate next turn using the NEW player list immediately
-      // Find the next player after currentTurnIndex who is still PLAYING
       let nextIndex = (currentTurnIndex + 1) % newPlayers.length;
       let safe = 0;
       while (newPlayers[nextIndex].status !== PlayerStatus.PLAYING && safe < 20) {
@@ -898,7 +981,6 @@ const App: React.FC = () => {
          safe++;
       }
       
-      // Clear last actions for everyone except the PK participants so we can see the result label for a bit
       const cleanedPlayers = newPlayers.map(p => {
           if (p.id === loserId || p.id === winnerId) return p;
           return { ...p, lastAction: undefined };
@@ -920,7 +1002,7 @@ const App: React.FC = () => {
 
   // --- Bot AI Loop (Host Only) ---
   useEffect(() => {
-    if (networkMode === 'CLIENT') return; // Client doesn't run bots
+    if (networkMode === 'CLIENT') return; 
 
     const currentPlayer = players[currentTurnIndex];
     const activePlayers = getActivePlayers();
@@ -939,9 +1021,7 @@ const App: React.FC = () => {
         switch (decision) {
           case 'FOLD': handleFold(currentPlayer.id); break;
           case 'RAISE':
-             // Bot Raise Logic: Check Limit
              if (raiseCount >= 10) {
-                 // Force Call or Compare if limit reached
                  if (Math.random() > 0.5) initiateCompare(currentPlayer.id);
                  else handleCall(currentPlayer.id);
              } else {
@@ -963,13 +1043,12 @@ const App: React.FC = () => {
   // If in lobby, show lobby
   if (inLobby) {
       return <Lobby 
-        onCreate={(mode, botCount) => {
+        onCreate={(mode, botCount, customId) => {
             setNetworkMode(mode);
-            if (mode === 'HOST') setupHost();
+            if (mode === 'HOST') setupHost(customId);
             if (mode === 'OFFLINE') {
                  setNetworkMode('OFFLINE');
                  setInLobby(false);
-                 // Initialize offline players based on count
                  const totalOpponents = botCount || 2;
                  const newPlayers: Player[] = [
                      { id: 0, name: '我', isHuman: true, chips: INITIAL_CHIPS, cards: [], hasSeenCards: false, status: PlayerStatus.WAITING, currentBet: 0, isDealer: false, avatar: getRandomAvatar() }
@@ -1000,7 +1079,7 @@ const App: React.FC = () => {
       />;
   }
 
-  const myPlayer = players[myPlayerId];
+  const myPlayer = players[myPlayerId] || players[0]; // Fallback for safety
   const isMyTurn = currentTurnIndex === myPlayerId && myPlayer.status === PlayerStatus.PLAYING && gamePhase === GamePhase.BETTING;
   const isTargetSelectMode = gamePhase === GamePhase.COMPARING && comparingInitiatorId === myPlayerId;
   const canAllIn = myPlayer.chips <= 500000;
@@ -1046,7 +1125,6 @@ const App: React.FC = () => {
           </div>
         </div>
         <div className="flex items-center space-x-6">
-           {/* Pot moved to center table, removed from here or kept as mini backup? Removed for cleaner look */}
            <div className="hidden sm:block text-right">
              <div className="text-[10px] text-gray-500 uppercase font-bold">当前底注</div>
              <div className="text-sm text-white font-mono">{currentRoundBet.toLocaleString()}</div>
@@ -1066,17 +1144,6 @@ const App: React.FC = () => {
 
         {/* Players Layout */}
         {(() => {
-            // Simplified Grid Layout logic for N players?
-            // Since we use grid-cols-3, it's best suited for 3-5 players.
-            // P0 (Me) always bottom. 
-            // Others distributed top/sides.
-            
-            // Helper to get relative seat index
-            const getRelativeSeat = (id: number) => {
-                const total = players.length;
-                return (id - myPlayerId + total) % total;
-            };
-
             const otherPlayers = players.filter(p => p.id !== myPlayerId);
             
             return (
@@ -1092,6 +1159,7 @@ const App: React.FC = () => {
                                     gamePhase={gamePhase}
                                     canBeCompared={isTargetSelectMode && p.status === PlayerStatus.PLAYING}
                                     onSelectForCompare={() => handleSelectTarget(p.id)}
+                                    isMe={false}
                                 />
                             </div>
                         ))}
@@ -1135,7 +1203,7 @@ const App: React.FC = () => {
                                 <div>
                                     <Trophy size={64} className="text-yellow-400 mx-auto mb-2 drop-shadow-[0_0_15px_rgba(250,204,21,0.8)]" />
                                     <div className="text-3xl font-black text-transparent bg-clip-text bg-gradient-to-r from-yellow-200 to-yellow-500 drop-shadow-sm mb-2">
-                                    {players[winnerId].name} 获胜!
+                                    {players[winnerId]?.name} 获胜!
                                     </div>
                                     <div className="text-yellow-100 font-mono text-xl">
                                         + {pot.toLocaleString()} 筹码
@@ -1187,19 +1255,20 @@ const App: React.FC = () => {
                     <div className="col-span-3 flex justify-center items-end pb-2">
                         <div className="relative transform scale-110">
                           <PlayerSeat 
-                            player={players[myPlayerId]} 
+                            player={myPlayer} 
                             isActive={currentTurnIndex === myPlayerId} 
                             gamePhase={gamePhase}
                             canBeCompared={false}
                             onSelectForCompare={() => {}}
+                            isMe={true}
                           />
-                          {players[myPlayerId].hasSeenCards && players[myPlayerId].cards.length === 3 && (
+                          {myPlayer.hasSeenCards && myPlayer.cards.length === 3 && (
                             <motion.div 
                                 initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }}
                                 className="absolute -right-32 top-10 bg-black/80 px-4 py-2 rounded-lg border border-gray-700 text-xs text-gray-300 backdrop-blur-sm shadow-xl"
                             >
                                 <div className="text-[10px] text-gray-500 uppercase">当前牌型</div>
-                                <div className="text-yellow-400 font-bold text-lg">{evaluateHand(players[myPlayerId].cards).label}</div>
+                                <div className="text-yellow-400 font-bold text-lg">{evaluateHand(myPlayer.cards).label}</div>
                             </motion.div>
                           )}
                         </div>
@@ -1233,9 +1302,9 @@ const App: React.FC = () => {
                     <span>弃牌</span>
                  </button>
 
-                 {!players[myPlayerId].hasSeenCards && players[myPlayerId].status === PlayerStatus.PLAYING && (
+                 {!myPlayer.hasSeenCards && myPlayer.status === PlayerStatus.PLAYING && (
                     <button 
-                        disabled={players[myPlayerId].status !== PlayerStatus.PLAYING}
+                        disabled={myPlayer.status !== PlayerStatus.PLAYING}
                         onClick={() => handleSeeCards(myPlayerId)}
                         className="btn-action bg-gradient-to-b from-blue-800 to-blue-900 border-blue-700 text-blue-100 min-w-[5rem] sm:min-w-[6rem]"
                     >
@@ -1302,7 +1371,6 @@ const App: React.FC = () => {
          </div>
       </footer>
       
-      {/* Styles for utility classes that might not be in tailwind config yet if using CDN logic primarily for dev, but here we assume tailwind handles it via className */}
       <style>{`
         .btn-action {
             @apply flex flex-col sm:flex-row items-center justify-center py-2 sm:py-3 px-3 rounded-xl shadow-lg border-t border-l border-white/10 transition-all active:scale-95 disabled:opacity-50 disabled:grayscale;

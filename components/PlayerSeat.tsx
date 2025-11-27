@@ -9,9 +9,10 @@ interface PlayerSeatProps {
   gamePhase: GamePhase;
   onSelectForCompare: () => void;
   canBeCompared: boolean;
+  isMe: boolean; // NEW: To control visibility strictly
 }
 
-const PlayerSeat: React.FC<PlayerSeatProps> = ({ player, isActive, gamePhase, onSelectForCompare, canBeCompared }) => {
+const PlayerSeat: React.FC<PlayerSeatProps> = ({ player, isActive, gamePhase, onSelectForCompare, canBeCompared, isMe }) => {
   const isFolded = player.status === PlayerStatus.FOLDED;
   const isLost = player.status === PlayerStatus.LOST;
   const isDimmed = isFolded || isLost;
@@ -26,6 +27,13 @@ const PlayerSeat: React.FC<PlayerSeatProps> = ({ player, isActive, gamePhase, on
       return () => clearTimeout(timer);
     }
   }, [player.lastAction]);
+
+  // Logic to determine if cards should be hidden
+  // 1. If it's NOT ME, I can never see cards unless SHOWDOWN or LOST.
+  // 2. If it IS ME, I can only see if I have clicked "See Cards" (hasSeenCards) or SHOWDOWN/LOST.
+  const shouldHideCards = 
+    (!isMe && gamePhase !== GamePhase.SHOWDOWN && player.status !== PlayerStatus.LOST) ||
+    (isMe && !player.hasSeenCards && gamePhase !== GamePhase.SHOWDOWN && player.status !== PlayerStatus.LOST);
 
   return (
     <div className={`relative flex flex-col items-center transition-all duration-300 ${isActive ? 'z-20 scale-105' : 'z-10'}`}>
@@ -67,10 +75,7 @@ const PlayerSeat: React.FC<PlayerSeatProps> = ({ player, isActive, gamePhase, on
             >
               <CardComponent 
                 card={card} 
-                hidden={
-                  (!player.isHuman && gamePhase !== GamePhase.SHOWDOWN && player.status !== PlayerStatus.LOST) ||
-                  (player.isHuman && !player.hasSeenCards && gamePhase !== GamePhase.SHOWDOWN && player.status !== PlayerStatus.LOST)
-                } 
+                hidden={shouldHideCards} 
                 className={`shadow-2xl ${isDimmed ? 'opacity-50 grayscale' : ''}`}
               />
             </motion.div>
@@ -109,7 +114,10 @@ const PlayerSeat: React.FC<PlayerSeatProps> = ({ player, isActive, gamePhase, on
         </div>
 
         <div className="text-center w-full relative z-10">
-          <div className="text-sm font-bold text-white truncate drop-shadow-md">{player.name}</div>
+          <div className="text-sm font-bold text-white truncate drop-shadow-md">
+            {player.name} 
+            {isMe && <span className="text-yellow-500 ml-1">(我)</span>}
+          </div>
           <div className="text-xs text-yellow-400 font-mono bg-black/30 rounded px-2 py-0.5 mt-1 inline-block border border-yellow-500/20">
              🪙 {player.chips.toLocaleString()}
           </div>
